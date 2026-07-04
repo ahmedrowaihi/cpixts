@@ -9,13 +9,103 @@
  * DRM signaling populated.
  */
 import { CPIX } from "../model/cpix.js";
-import { DRMSystem } from "../model/drm-system.js";
+import { ContentKey, ContentKeyList } from "../model/content-key.js";
+import { DRMSystem, DRMSystemList } from "../model/drm-system.js";
 import { AudioFilter, VideoFilter } from "../model/filters.js";
 import { UsageRule } from "../model/usage-rule.js";
+import { Period, PeriodList } from "../model/period.js";
 import { WIDEVINE_SYSTEM_ID, PLAYREADY_SYSTEM_ID } from "../constants.js";
 import { b64encode, b64decode, b16encode } from "../base64.js";
+import { atLeastVersion, coerceCpixVersion } from "../version.js";
+import { ValueError } from "../errors.js";
 import * as widevine from "../drm/widevine.js";
 import * as playready from "../drm/playready.js";
+
+/** Common Encryption scheme values (CPIX 2.3+). */
+export type CommonEncryptionScheme = "cenc" | "cbcs" | "cens" | "cbc1";
+
+export interface SpekeRequestOptions {
+  /** SPEKE protocol version. Governs CPIX shape (v1 omits version/CES/rotation). */
+  version: "1.0" | "2.0";
+  /** Content identifier (v2 typically sets it; v1 often omits it). */
+  contentId?: string;
+  /** Key ids to request (one for single-key VOD). */
+  keyIds: string[];
+  /** DRM systems to request, by systemId. */
+  drmSystems: { systemId: string }[];
+  /** Key rotation periods — v2 only; emits a ContentKeyPeriodList. */
+  rotation?: { periods: Array<{ index?: number; start?: string; end?: string }> };
+  /** commonEncryptionScheme for the content keys (CPIX 2.3+ / SPEKE v2). */
+  commonEncryptionScheme?: CommonEncryptionScheme;
+}
+
+/**
+ * Build a SPEKE request CPIX document. Vendor-neutral and version-aware:
+ *
+ * - `version: "1.0"` produces a CPIX 2.2-shaped request — no `version`
+ *   attribute, no `commonEncryptionScheme`, and never a `ContentKeyPeriodList`
+ *   (single static key). Passing `rotation` with v1 throws.
+ * - `version: "2.0"` produces a CPIX 2.3-shaped request and emits a
+ *   `ContentKeyPeriodList` when `rotation` is given.
+ *
+ * Inspect `cpix.periods.length` / `cpix.version` to assert the shape produced.
+ */
+export function buildSpekeRequest(options: SpekeRequestOptions): CPIX {
+  const isV2 = options.version === "2.0";
+
+  const contentKeys = new ContentKeyList(
+    ...options.keyIds.map(
+      (kid) =>
+        new ContentKey({ kid, commonEncryptionScheme: isV2 ? (options.commonEncryptionScheme ?? null) : null }),
+    ),
+  );
+
+  const drmSystems = new DRMSystemList();
+  for (const kid of options.keyIds) {
+    for (const system of options.drmSystems) {
+      drmSystems.append(new DRMSystem({ kid, systemId: system.systemId }));
+    }
+  }
+
+  // The version attribute drives serialization; for v1 the serializer gates the
+  // attribute and commonEncryptionScheme back out (both are 2.3+ features).
+  const cpix = new CPIX({
+    contentId: options.contentId ?? null,
+    version: isV2 ? "2.3" : "2.2",
+    contentKeys,
+    drmSystems,
+  });
+
+  if (options.rotation) {
+    if (!isV2) throw new ValueError("key rotation (ContentKeyPeriodList) requires SPEKE v2");
+    cpix.periods = new PeriodList(
+      ...options.rotation.periods.map(
+        (p, i) => new Period({ id: `period${i}`, index: p.index ?? null, start: p.start ?? null, end: p.end ?? null }),
+      ),
+    );
+  }
+
+  return cpix;
+}
+
+/**
+ * Validate the request side of a SPEKE exchange: at least one content key, and
+ * no key-rotation block on a v1 (CPIX < 2.3) request. Mirror of
+ * {@link validateSpekeV2} for outgoing requests.
+ *
+ * @returns `[valid, errors]`.
+ */
+export function validateSpekeRequest(cpix: CPIX): [boolean, string[]] {
+  const errors: string[] = [];
+  if (cpix.contentKeys.length === 0) errors.push("request must list at least one content key");
+
+  const version = coerceCpixVersion(cpix.version);
+  const isV2 = version != null && atLeastVersion(version, "2.3");
+  if (cpix.periods.length > 0 && !isV2) {
+    errors.push("ContentKeyPeriodList (key rotation) requires SPEKE v2 / CPIX 2.3+; not valid on a v1 request");
+  }
+  return [errors.length === 0, errors];
+}
 
 function isEmptyAudioFilter(f: AudioFilter): boolean {
   return !f.minChannels && !f.maxChannels;

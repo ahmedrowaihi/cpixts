@@ -94,6 +94,44 @@ pieces you build a SPEKE proxy, key server, or test harness on. The
 holds the shared request→response logic, and [speke.node.ts](examples/speke.node.ts)
 / [speke.bun.ts](examples/speke.bun.ts) each add only the `serve` glue.
 
+`buildSpekeRequest` (also in `cpixts/speke`) builds a version-aware SPEKE
+request document — v1 omits the rotation block; v2 emits `ContentKeyPeriodList`
+when `rotation` is given. `validateSpekeRequest` checks the request side.
+
+## Calling a key server
+
+`cpixts/client` is the caller-side counterpart to `handleSpeke` — POST a CPIX
+document and get the parsed response. It is deliberately **vendor-neutral**:
+endpoints and auth are injected by you, never baked in. Provider-specific
+request signing lives in your `CpixAuth`, via `headerAuth` — not in the library.
+
+```ts
+import { CpixClient, headerAuth } from "cpixts/client";
+import { buildSpekeRequest } from "cpixts/speke";
+
+const client = new CpixClient({
+  endpoint: "https://keys.example.com/cpix",
+  // any provider's own auth scheme goes here — the library stays generic:
+  auth: headerAuth("X-Vendor-Token", () => mintToken()),
+  // basicAuth(user, pass) and bearerAuth(token) are also provided (RFC-standard)
+});
+
+const request = buildSpekeRequest({
+  version: "2.0",
+  contentId: "movie-1",
+  keyIds: ["0dc3ec4f-7683-548b-81e7-3c64e582e136"],
+  drmSystems: [{ systemId: "edef8ba9-79d6-4ace-a3c8-27dcd51d21ed" }],
+  commonEncryptionScheme: "cbcs",
+});
+
+const res = await client.request(request);        // throws CpixHttpError on non-2xx
+const cek = res.cpix.keyFor("0dc3ec4f-7683-548b-81e7-3c64e582e136")?.cek;
+```
+
+Parsed documents expose ergonomic accessors — `keyFor(kid)`, `psshFor(systemId)`,
+`hlsKeyUriFor(systemId)`, `systems()` — and `contentKey.decrypt(documentKey)`
+unwraps a document-key-encrypted CEK (DASH-IF CPIX §9).
+
 ## Development
 
 ```

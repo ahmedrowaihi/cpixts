@@ -3,8 +3,10 @@ import { Element } from "../xml.js";
 import { ComparableBase } from "../base.js";
 import { LATEST_CPIX_VERSION, atLeastVersion, coerceCpixVersion, type CpixVersion } from "../version.js";
 import { XSI, NSMAP } from "../constants.js";
-import { ContentKeyList } from "./content-key.js";
-import { DRMSystemList } from "./drm-system.js";
+import { Uuid, toUuid } from "../uuid.js";
+import { b64decode, fromBytes } from "../base64.js";
+import { ContentKey, ContentKeyList } from "./content-key.js";
+import { DRMSystem, DRMSystemList } from "./drm-system.js";
 import { UsageRuleList } from "./usage-rule.js";
 import { PeriodList } from "./period.js";
 import { DeliveryDataList } from "./delivery-data.js";
@@ -190,6 +192,32 @@ export class CPIX extends ComparableBase {
       }
     }
     return [errors.length === 0, errors];
+  }
+
+  /** The content key for a kid, if present. */
+  keyFor(kid: string | Uuid): ContentKey | undefined {
+    const target = toUuid(kid);
+    return this.contentKeys.find((k) => k.kid.equals(target));
+  }
+
+  /** The base64 PSSH for a DRM system, if present. */
+  psshFor(systemId: string | Uuid): string | undefined {
+    const target = toUuid(systemId);
+    return this.drmSystems.find((d) => d.systemId.equals(target))?.pssh ?? undefined;
+  }
+
+  /** The HLS key URI (`URI="..."` from the media HLSSignalingData) for a DRM system, if present. */
+  hlsKeyUriFor(systemId: string | Uuid): string | undefined {
+    const target = toUuid(systemId);
+    const data = this.drmSystems.find((d) => d.systemId.equals(target))?.hlsSignalingData;
+    if (data == null) return undefined;
+    const match = /URI="([^"]*)"/.exec(fromBytes(b64decode(data)));
+    return match?.[1];
+  }
+
+  /** All DRM systems as a plain array. */
+  systems(): DRMSystem[] {
+    return [...this.drmSystems];
   }
 
   /**

@@ -3,7 +3,7 @@ import { Element, subElement } from "../xml.js";
 import { ComparableBase, CpixList } from "../base.js";
 import { atLeastVersion, LATEST_CPIX_VERSION, type CpixVersion } from "../version.js";
 import { Uuid, toUuid } from "../uuid.js";
-import { b64decode } from "../base64.js";
+import { b64decode, b64encode } from "../base64.js";
 import { ValueError } from "../errors.js";
 import { NSMAP, PSKC, ENC, CONTENT_KEY_WRAPPING_ALGORITHM } from "../constants.js";
 import { ParsedNode, fromString } from "../dom.js";
@@ -91,6 +91,38 @@ export class ContentKey extends ComparableBase {
     } else {
       this._valueMac = null;
     }
+  }
+
+  /**
+   * Decrypt a document-key-wrapped content key (DASH-IF CPIX §9). `cek` here is
+   * the `EncryptedValue` cipher (IV-prefixed AES-256-CBC, per xmlenc), and
+   * `documentKey` is the *unwrapped* AES-256 document key — RSA-unwrapping it
+   * from a DeliveryData block needs the recipient's private key and is left to
+   * the caller.
+   *
+   * @param documentKey raw 32-byte AES key, or its base64 encoding.
+   * @returns the base64 content key (the value a `PlainValue` would carry).
+   */
+  async decrypt(documentKey: Uint8Array | string): Promise<string> {
+    if (this._cek == null) throw new ValueError("content key has no value to decrypt");
+    if (this._valueMac == null) throw new ValueError("content key is not encrypted (no ValueMAC)");
+    const keyBytes = typeof documentKey === "string" ? b64decode(documentKey) : documentKey;
+    const cipher = b64decode(this._cek);
+    const iv = cipher.slice(0, 16); // xmlenc prepends the IV to the ciphertext
+    const ciphertext = cipher.slice(16);
+    const key = await crypto.subtle.importKey(
+      "raw",
+      keyBytes as unknown as ArrayBuffer,
+      { name: "AES-CBC" },
+      false,
+      ["decrypt"],
+    );
+    const plain = await crypto.subtle.decrypt(
+      { name: "AES-CBC", iv: iv as unknown as ArrayBuffer },
+      key,
+      ciphertext as unknown as ArrayBuffer,
+    );
+    return b64encode(new Uint8Array(plain));
   }
 
   element(version: CpixVersion = LATEST_CPIX_VERSION): Element {

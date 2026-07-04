@@ -47,6 +47,10 @@
     "./speke": {
       "types": "./dist/speke/index.d.ts",
       "import": "./dist/speke/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js"
     }
   },
   "publishConfig": {
