@@ -38,14 +38,34 @@ bootstrap; after that, releases are fully automated.
        --allow-publish
      ```
 
-## Every release after that
+## Every release after that (Changesets)
 
-1. Bump `version` in `package.json` and commit.
-2. Create a **GitHub Release** (tag it, e.g. `v0.2.0`).
-3. The [`publish` workflow](.github/workflows/publish.yml) runs on the release,
-   publishes via OIDC, and attaches provenance. No token, no manual step.
+Releases are driven by [Changesets](https://github.com/changesets/changesets) —
+no manual version bumps or `npm publish`.
+
+1. **Add a changeset** with your change (or PR):
+
+   ```bash
+   npx changeset          # pick patch/minor/major + write a summary
+   ```
+
+   Commit the generated `.changeset/*.md` file alongside your code.
+
+2. **Merge to `main`.** The [Release workflow](.github/workflows/publish.yml)
+   collects pending changesets into a **"Version Packages"** PR that bumps the
+   version and updates `CHANGELOG.md`.
+
+3. **Merge the "Version Packages" PR.** That publishes to npm via OIDC (with
+   provenance) and creates the matching GitHub Release automatically.
+
+Infra/CI-only changes don't need a changeset (they don't affect the package).
 
 ## Requirements (handled by the workflow)
 
-- npm CLI `>= 11.5.1` (the workflow upgrades npm; Node 22 bundles an older one).
-- `permissions: id-token: write` on the publish job (already set).
+- npm CLI `>= 11.5.1` for OIDC publishing (the workflow upgrades npm; Node 22
+  bundles an older one).
+- Job permissions `contents: write`, `pull-requests: write`, `id-token: write`
+  (already set).
+- Repo setting **Settings → Actions → General → "Allow GitHub Actions to create
+  and approve pull requests"** must be enabled so the workflow can open the
+  Version Packages PR.
