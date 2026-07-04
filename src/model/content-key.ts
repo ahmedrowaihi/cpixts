@@ -3,7 +3,7 @@ import { Element, subElement } from "../xml.js";
 import { ComparableBase, CpixList } from "../base.js";
 import { atLeastVersion, LATEST_CPIX_VERSION, type CpixVersion } from "../version.js";
 import { Uuid, toUuid } from "../uuid.js";
-import { b64decode, b64encode } from "../base64.js";
+import { b64decode } from "../base64.js";
 import { ValueError } from "../errors.js";
 import { NSMAP, PSKC, ENC, CONTENT_KEY_WRAPPING_ALGORITHM } from "../constants.js";
 import { ParsedNode, fromString } from "../dom.js";
@@ -101,9 +101,9 @@ export class ContentKey extends ComparableBase {
    * the caller.
    *
    * @param documentKey raw 32-byte AES key, or its base64 encoding.
-   * @returns the base64 content key (the value a `PlainValue` would carry).
+   * @returns the raw content-key bytes.
    */
-  async decrypt(documentKey: Uint8Array | string): Promise<string> {
+  async decrypt(documentKey: Uint8Array | string): Promise<Uint8Array> {
     if (this._cek == null) throw new ValueError("content key has no value to decrypt");
     if (this._valueMac == null) throw new ValueError("content key is not encrypted (no ValueMAC)");
     const keyBytes = typeof documentKey === "string" ? b64decode(documentKey) : documentKey;
@@ -122,7 +122,7 @@ export class ContentKey extends ComparableBase {
       key,
       ciphertext as unknown as ArrayBuffer,
     );
-    return b64encode(new Uint8Array(plain));
+    return new Uint8Array(plain);
   }
 
   element(version: CpixVersion = LATEST_CPIX_VERSION): Element {

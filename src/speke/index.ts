@@ -11,13 +11,11 @@
 import { CPIX } from "../model/cpix.js";
 import { ContentKey, ContentKeyList } from "../model/content-key.js";
 import { DRMSystem, DRMSystemList } from "../model/drm-system.js";
-import { AudioFilter, VideoFilter } from "../model/filters.js";
-import { UsageRule } from "../model/usage-rule.js";
+import { AudioFilter, VideoFilter, KeyPeriodFilter } from "../model/filters.js";
+import { UsageRule, UsageRuleList } from "../model/usage-rule.js";
 import { Period, PeriodList } from "../model/period.js";
 import { WIDEVINE_SYSTEM_ID, PLAYREADY_SYSTEM_ID } from "../constants.js";
 import { b64encode, b64decode, b16encode } from "../base64.js";
-import { atLeastVersion, coerceCpixVersion } from "../version.js";
-import { ValueError } from "../errors.js";
 import * as widevine from "../drm/widevine.js";
 import * as playready from "../drm/playready.js";
 
@@ -25,7 +23,13 @@ import * as playready from "../drm/playready.js";
 export type CommonEncryptionScheme = "cenc" | "cbcs" | "cens" | "cbc1";
 
 export interface SpekeRequestOptions {
-  /** SPEKE protocol version. Governs CPIX shape (v1 omits version/CES/rotation). */
+  /**
+   * SPEKE protocol version. v1 → CPIX-2.0-shaped (single key, no `version`
+   * attribute, no `commonEncryptionScheme`); v2 → CPIX 2.3 (multi-key,
+   * `commonEncryptionScheme`). Key rotation is supported by BOTH versions.
+   * Note: SPEKE also signals the version via the `X-Speke-Version` HTTP header
+   * — set it on the request (see {@link SPEKE_VERSION_HEADER}).
+   */
   version: "1.0" | "2.0";
   /** Content identifier (v2 typically sets it; v1 often omits it). */
   contentId?: string;
@@ -33,22 +37,30 @@ export interface SpekeRequestOptions {
   keyIds: string[];
   /** DRM systems to request, by systemId. */
   drmSystems: { systemId: string }[];
-  /** Key rotation periods — v2 only; emits a ContentKeyPeriodList. */
+  /**
+   * Key rotation periods (supported by v1 and v2). Emits a ContentKeyPeriodList
+   * plus KeyPeriodFilters. SPEKE tracks periods by `index`; `start`/`end` are
+   * accepted for servers that use them but AWS SPEKE ignores them.
+   */
   rotation?: { periods: Array<{ index?: number; start?: string; end?: string }> };
   /** commonEncryptionScheme for the content keys (CPIX 2.3+ / SPEKE v2). */
   commonEncryptionScheme?: CommonEncryptionScheme;
 }
 
+/** The HTTP header SPEKE uses to signal its version (e.g. "1.0", "2.0"). */
+export const SPEKE_VERSION_HEADER = "X-Speke-Version";
+
 /**
  * Build a SPEKE request CPIX document. Vendor-neutral and version-aware:
  *
- * - `version: "1.0"` produces a CPIX 2.2-shaped request — no `version`
- *   attribute, no `commonEncryptionScheme`, and never a `ContentKeyPeriodList`
- *   (single static key). Passing `rotation` with v1 throws.
- * - `version: "2.0"` produces a CPIX 2.3-shaped request and emits a
- *   `ContentKeyPeriodList` when `rotation` is given.
+ * - `version: "1.0"` → CPIX-2.0-shaped: single-key style, no `version`
+ *   attribute, no `commonEncryptionScheme`.
+ * - `version: "2.0"` → CPIX 2.3: `version` attribute and `commonEncryptionScheme`.
  *
- * Inspect `cpix.periods.length` / `cpix.version` to assert the shape produced.
+ * Key rotation is supported by BOTH versions: passing `rotation` emits a
+ * `ContentKeyPeriodList` (index-based, per SPEKE) plus the `KeyPeriodFilter`
+ * elements SPEKE requires to bind keys to periods. Remember to also send the
+ * `X-Speke-Version` header on the HTTP request ({@link SPEKE_VERSION_HEADER}).
  */
 export function buildSpekeRequest(options: SpekeRequestOptions): CPIX {
   const isV2 = options.version === "2.0";
@@ -77,32 +89,56 @@ export function buildSpekeRequest(options: SpekeRequestOptions): CPIX {
   });
 
   if (options.rotation) {
-    if (!isV2) throw new ValueError("key rotation (ContentKeyPeriodList) requires SPEKE v2");
-    cpix.periods = new PeriodList(
-      ...options.rotation.periods.map(
-        (p, i) => new Period({ id: `period${i}`, index: p.index ?? null, start: p.start ?? null, end: p.end ?? null }),
-      ),
+    const periods = options.rotation.periods.map(
+      (p, i) => new Period({ id: `period${i}`, index: p.index ?? null, start: p.start ?? null, end: p.end ?? null }),
+    );
+    cpix.periods = new PeriodList(...periods);
+    // SPEKE requires a KeyPeriodFilter per rotated key to bind it to the periods.
+    cpix.usageRules = new UsageRuleList(
+      ...options.keyIds.map((kid) => new UsageRule({ kid, filters: periods.map((p) => new KeyPeriodFilter(p.id)) })),
     );
   }
 
   return cpix;
 }
 
+/** Caller policy for {@link validateSpekeRequest} (profile-specific, not spec). */
+export interface SpekeRequestPolicy {
+  /**
+   * Reject a document that carries a rotation block. Some key servers reject a
+   * `ContentKeyPeriodList` on single-key VOD — that is a caller/profile concern,
+   * so it is asserted here rather than baked into the builder.
+   */
+  allowRotation?: boolean;
+}
+
 /**
- * Validate the request side of a SPEKE exchange: at least one content key, and
- * no key-rotation block on a v1 (CPIX < 2.3) request. Mirror of
+ * Validate the request side of a SPEKE exchange: at least one content key,
+ * period filters that reference existing periods, and — when a rotation block
+ * is present — the `KeyPeriodFilter` SPEKE requires. Mirror of
  * {@link validateSpekeV2} for outgoing requests.
+ *
+ * Whether a rotation block is *allowed* is caller policy (`policy.allowRotation`),
+ * never tied to the SPEKE version — a period block is standard CPIX key
+ * rotation, valid in both v1 and v2.
  *
  * @returns `[valid, errors]`.
  */
-export function validateSpekeRequest(cpix: CPIX): [boolean, string[]] {
+export function validateSpekeRequest(cpix: CPIX, policy: SpekeRequestPolicy = {}): [boolean, string[]] {
   const errors: string[] = [];
   if (cpix.contentKeys.length === 0) errors.push("request must list at least one content key");
 
-  const version = coerceCpixVersion(cpix.version);
-  const isV2 = version != null && atLeastVersion(version, "2.3");
-  if (cpix.periods.length > 0 && !isV2) {
-    errors.push("ContentKeyPeriodList (key rotation) requires SPEKE v2 / CPIX 2.3+; not valid on a v1 request");
+  // KeyPeriodFilter -> ContentKeyPeriod reference integrity.
+  errors.push(...cpix.checkPeriodFilters()[1]);
+
+  if (cpix.periods.length > 0) {
+    if (policy.allowRotation === false) {
+      errors.push("rotation block (ContentKeyPeriodList) is not allowed by this profile");
+    }
+    const hasFilter = cpix.usageRules.some((rule) => [...rule].some((f) => f instanceof KeyPeriodFilter));
+    if (!hasFilter) {
+      errors.push("key rotation (ContentKeyPeriodList) requires a ContentKeyUsageRule with a KeyPeriodFilter");
+    }
   }
   return [errors.length === 0, errors];
 }

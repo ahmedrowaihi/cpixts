@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { CPIX, ContentKey, ContentKeyList, DRMSystem, DRMSystemList } from "../src/index.js";
-import { b64encode, b64decode, toBytes } from "../src/base64.js";
+import { b64encode, toBytes } from "../src/base64.js";
 
 const KID = "0dc3ec4f-7683-548b-81e7-3c64e582e136";
 const CEK = "WADwG2qCqkq5TVml+U5PXw==";
@@ -53,12 +53,12 @@ describe("ContentKey.decrypt (document-key-wrapped CEK)", () => {
   const iv = new Uint8Array(16).fill(7);
   const cek = toBytes("0123456789abcdef"); // a known 16-byte key
 
-  it("recovers the plaintext content key (raw and base64 document key)", async () => {
+  it("recovers the plaintext content key bytes (raw and base64 document key)", async () => {
     const cipherValue = await wrapKey(docKey, iv, cek);
     const ck = new ContentKey({ kid: KID, cek: cipherValue, valueMac: "AAAA" });
 
-    expect([...b64decode(await ck.decrypt(docKey))]).toEqual([...cek]);
-    expect([...b64decode(await ck.decrypt(b64encode(docKey)))]).toEqual([...cek]);
+    expect([...(await ck.decrypt(docKey))]).toEqual([...cek]);
+    expect([...(await ck.decrypt(b64encode(docKey)))]).toEqual([...cek]);
   });
 
   it("throws on a plain (unencrypted) content key", async () => {
