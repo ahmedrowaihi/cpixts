@@ -1,0 +1,36 @@
+name: Publish
+
+# Publishes to npm via OIDC trusted publishing when a GitHub Release is published.
+# No NPM_TOKEN needed — auth and provenance come from GitHub's OIDC token.
+#
+# One-time bootstrap first (see PUBLISHING.md): npm has no OIDC path for a
+# package's very first publish, so publish the initial version manually, then
+# configure the trusted publisher pointing at this workflow. Every release
+# after that is handled here.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC trusted publishing + provenance
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      # actions/setup-node v4.4.0 — no dependency cache configured in this publish job
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # zizmor: ignore[cache-poisoning]
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm test
+      # Trusted publishing requires npm >= 11.5.1 (newer than Node 22 bundles).
+      - run: npm install -g npm@latest
+      - run: npm publish

@@ -1,0 +1,73 @@
+{
+  "name": "cpixts",
+  "version": "0.1.0",
+  "description": "Isomorphic TypeScript library for CPIX (DASH-IF Content Protection Information Exchange) documents, with Widevine/PlayReady DRM and AWS SPEKE v2 support",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "sideEffects": false,
+  "license": "MIT",
+  "author": "Ahmed Rowaihi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ahmedrowaihi/cpixts.git"
+  },
+  "homepage": "https://github.com/ahmedrowaihi/cpixts#readme",
+  "bugs": {
+    "url": "https://github.com/ahmedrowaihi/cpixts/issues"
+  },
+  "keywords": [
+    "cpix",
+    "drm",
+    "speke",
+    "dash",
+    "dash-if",
+    "widevine",
+    "playready",
+    "hls",
+    "pssh",
+    "content-protection"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./drm": {
+      "types": "./dist/drm/index.d.ts",
+      "import": "./dist/drm/index.js"
+    },
+    "./speke": {
+      "types": "./dist/speke/index.d.ts",
+      "import": "./dist/speke/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "dependencies": {
+    "libxml2-wasm": "^0.5.0",
+    "protobufjs": "^7.4.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
