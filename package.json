@@ -1,6 +1,6 @@
 {
   "name": "cpixts",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Isomorphic TypeScript library for CPIX (DASH-IF Content Protection Information Exchange) documents, with Widevine/PlayReady DRM and AWS SPEKE v2 support",
   "type": "module",
   "main": "dist/index.js",
